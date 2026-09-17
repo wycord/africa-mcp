@@ -26,6 +26,13 @@ export interface RateFetch {
   asOf: string;
 }
 
+/** A scraped rate together with the publication date printed on its own row, if any. */
+export interface ScrapedRow {
+  rate: number;
+  /** The source's own publication date, or null when the page prints none. */
+  asOf: string | null;
+}
+
 /**
  * Parse a rate out of raw table text, handling the separator conventions our sources use:
  * "1,550.00" (anglophone), "1 550,00" / "1.550,00" (francophone), "1550", "1550.25".
@@ -67,6 +74,63 @@ export function parseNumber(raw: string): number {
   return n;
 }
 
+const MONTHS: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+};
+
+/**
+ * Parse a source's own PUBLICATION date into YYYY-MM-DD, across the formats our v1 sources
+ * actually use: "2026-09-17" (SARB), "September-16-2026" (CBN), "16 Sep 2026" (BoG),
+ * "17-Sep-26" (BoT). Returns null when the value is absent or not a real calendar date.
+ *
+ * This matters more than it looks. `as_of` is the field a caller reads to decide how old a
+ * rate is, so substituting today's date for the real one reports a Friday rate as Monday's
+ * — and because `stale` is derived from fetchedAt (always "now" on a successful fetch), a
+ * frozen upstream would otherwise read as perpetually fresh. Never invent this date.
+ */
+export function parsePublicationDate(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const s = raw.trim();
+  if (!s) return null;
+
+  let y: number | undefined;
+  let m: number | undefined;
+  let d: number | undefined;
+
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    [y, m, d] = [Number(iso[1]), Number(iso[2]), Number(iso[3])];
+  }
+  if (y === undefined) {
+    // Month first: "September-16-2026", "Sep 16, 2026".
+    const mf = s.match(/^([A-Za-z]{3,})[\s\-,]+(\d{1,2})[\s\-,]+(\d{2,4})$/);
+    if (mf) {
+      m = MONTHS[mf[1].slice(0, 3).toLowerCase()];
+      [d, y] = [Number(mf[2]), Number(mf[3])];
+    }
+  }
+  if (y === undefined) {
+    // Day first: "16 Sep 2026", "17-Sep-26".
+    const df = s.match(/^(\d{1,2})[\s\-,]+([A-Za-z]{3,})[\s\-,]+(\d{2,4})$/);
+    if (df) {
+      m = MONTHS[df[2].slice(0, 3).toLowerCase()];
+      [d, y] = [Number(df[1]), Number(df[3])];
+    }
+  }
+  if (!y || !m || !d) return null;
+  if (y < 100) y += 2000; // "26" -> 2026
+
+  const out = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  // Round-trip through Date so an impossible calendar date (31 Feb) is rejected, not shifted.
+  const t = new Date(`${out}T00:00:00Z`);
+  if (Number.isNaN(t.getTime()) || t.toISOString().slice(0, 10) !== out) return null;
+  // A date far in the future means we misread the field, not that the bank published ahead.
+  // Two days of slack absorbs the local-vs-UTC offset for an African publishing timezone.
+  if (t.getTime() > Date.now() + 2 * 86_400_000) return null;
+  return out;
+}
+
 /** Strip tags and decode the handful of entities that show up inside rate cells. */
 function cellText(html: string): string {
   return html
@@ -103,7 +167,7 @@ function mentionsLabel(text: string, label: string): boolean {
  * commentary cell, or a second table on the same page, would otherwise silently yield a
  * number from the wrong row — and a wrong rate is worse than no rate.
  */
-export function extractRateFromHtml(html: string, cfg: SourceConfig, quote: string): number {
+export function extractRowFromHtml(html: string, cfg: SourceConfig, quote: string): ScrapedRow {
   const sel = cfg.selectors;
   if (!sel?.rowSelector) {
     throw new Error(`${cfg.label} (v${cfg.configVersion}): no row selector configured.`);
@@ -139,9 +203,17 @@ export function extractRateFromHtml(html: string, cfg: SourceConfig, quote: stri
     // Anchor on a complete numeric token so a stray "2026" beside the rate cannot win.
     const m = cell.match(/-?\d[\d.,   ]*\d|-?\d/);
     if (!m) continue;
-    return parseNumber(m[0]);
+    // Take the publication date from the SAME row as the rate, so the two can never be
+    // stamped from different days. Null when the source publishes no date column.
+    const asOf = sel.dateColumn !== undefined ? parsePublicationDate(cells[sel.dateColumn]) : null;
+    return { rate: parseNumber(m[0]), asOf };
   }
   throw new Error(`${cfg.label} (v${cfg.configVersion}): no parseable ${quote} row in page`);
+}
+
+/** Rate-only convenience wrapper over extractRowFromHtml. */
+export function extractRateFromHtml(html: string, cfg: SourceConfig, quote: string): number {
+  return extractRowFromHtml(html, cfg, quote).rate;
 }
 
 function official(cfg: SourceConfig, fetched: RateFetch): OfficialRate {
@@ -164,9 +236,9 @@ function todayLocal(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Accept only a plain YYYY-MM-DD publication date from a payload; otherwise use today. */
+/** A payload's own publication date where it has a usable one; otherwise today. */
 function asOfDate(raw: unknown): string {
-  return typeof raw === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : todayLocal();
+  return parsePublicationDate(raw) ?? todayLocal();
 }
 
 // ---------- Rwanda (BNR) — UNAVAILABLE ----------
@@ -193,7 +265,10 @@ export async function fetchCbn(cfg: SourceConfig): Promise<OfficialRate> {
   if (!Number.isFinite(rate) || rate <= 0) {
     throw new Error(`${cfg.label}: NFEM latest row has no usable weightedAvgRate/closingrate`);
   }
-  return official(cfg, { rate, asOf: todayLocal() });
+  // The row carries its own trading date ("September-16-2026"). CBN publishes in arrears, so
+  // the newest row is routinely YESTERDAY's session — stamping today's date here would report
+  // a one-day-old rate as current, which is exactly the misdating callers price against.
+  return official(cfg, { rate, asOf: parsePublicationDate(latest.ratedate) ?? todayLocal() });
 }
 
 // ---------- Kenya (CBK) — UNAVAILABLE (PDF-only) ----------
@@ -211,14 +286,16 @@ export async function fetchCbk(cfg: SourceConfig): Promise<OfficialRate> {
 
 export async function fetchBog(cfg: SourceConfig): Promise<OfficialRate> {
   const html = await fetchText(cfg.url, { service: cfg.label, fallbackHint: FALLBACK_HINT });
-  return official(cfg, { rate: extractRateFromHtml(html, cfg, "USD"), asOf: todayLocal() });
+  const row = extractRowFromHtml(html, cfg, "USD");
+  return official(cfg, { rate: row.rate, asOf: row.asOf ?? todayLocal() });
 }
 
 // ---------- Tanzania (BoT) — scrape ----------
 
 export async function fetchBot(cfg: SourceConfig): Promise<OfficialRate> {
   const html = await fetchText(cfg.url, { service: cfg.label, fallbackHint: FALLBACK_HINT });
-  return official(cfg, { rate: extractRateFromHtml(html, cfg, "USD"), asOf: todayLocal() });
+  const row = extractRowFromHtml(html, cfg, "USD");
+  return official(cfg, { rate: row.rate, asOf: row.asOf ?? todayLocal() });
 }
 
 // ---------- South Africa (SARB) — JSON API ----------

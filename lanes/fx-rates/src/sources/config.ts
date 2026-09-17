@@ -19,6 +19,12 @@ export interface SelectorConfig {
   valueColumn?: number;
   /** Which column holds the quote-currency code (0-based), where applicable. */
   currencyColumn?: number;
+  /**
+   * Which column holds the row's own publication date (0-based), where the source prints
+   * one. Read from the SAME row as the rate so `as_of` can never be invented — see
+   * parsePublicationDate() in fetchers.ts.
+   */
+  dateColumn?: number;
 }
 
 export interface SourceConfig {
@@ -61,12 +67,12 @@ export const OFFICIAL_SOURCES: Record<string, SourceConfig> = {
     country: "GH",
     currency: "GHS",
     kind: "scrape",
-    configVersion: 2,
+    configVersion: 3,
     url: "https://www.bog.gov.gh/treasury-and-the-markets/daily-interbank-fx-rates/",
-    selectors: { selector: "table_2", rowSelector: "table", valueColumn: 5, currencyColumn: 1 },
+    selectors: { selector: "table_31", rowSelector: "table", valueColumn: 5, currencyColumn: 1, dateColumn: 0 },
     // No confirmed Frankfurter coverage for BoG — OpenDataForAfrica is the cross-check.
     crossCheck: "opendataforafrica",
-    notes: "HTML table with id table_31; USD row has Currency='US Dollar' col1 and Closing Rate in col5. Verified 2026-09-17.",
+    notes: "Columns: 0=Date, 1=Currency ('US Dollar'), 2=Currency Pair, 3=Buying, 4=Selling, 5=Mid Rate. We take the Mid Rate, and the row's own Date — BoG publishes in arrears, so it is routinely yesterday. Verified live 2026-09-17 (USD row: 16 Sep 2026, mid 11.5000).",
   },
   KE: {
     id: "cbk",
@@ -95,10 +101,10 @@ export const OFFICIAL_SOURCES: Record<string, SourceConfig> = {
     country: "TZ",
     currency: "TZS",
     kind: "scrape",
-    configVersion: 2,
+    configVersion: 3,
     url: "https://www.bot.go.tz/ExchangeRate/excRates?lang=en",
-    selectors: { selector: "excRates", rowSelector: "table", valueColumn: 2, currencyColumn: 1 },
-    notes: "HTML table: USD row has currency code in col1 and Mean rate in col2. Verified 2026-09-17. No independent cross-check (Frankfurter does not serve TZS).",
+    selectors: { selector: "excRates", rowSelector: "table", valueColumn: 4, currencyColumn: 1, dateColumn: 5 },
+    notes: "Columns: 0=S/NO, 1=Currency ('USD'), 2=Buying, 3=Selling, 4=Mean, 5=Transaction Date. valueColumn MUST stay 4 (Mean): col2 is the one-sided BUYING quote, ~0.5% below mid, and convert() uses this rate in both directions. Every sibling source is a mid/weighted average (CBN weightedAvgRate, BoG Mid Rate, SARB mid), so a bid here would also bias reconciliation. Verified live 2026-09-17 (USD: buy 2628.4455, sell 2654.73, mean 2641.5878).",
   },
   RW: {
     id: "bnr",

@@ -19,7 +19,7 @@ import {
 import { fxTools } from "../src/tools.js";
 import { MockFxProvider } from "../src/providers/mock.js";
 import { LiveFxProvider } from "../src/providers/live.js";
-import { extractRateFromHtml, parseNumber } from "../src/sources/fetchers.js";
+import { extractRateFromHtml, extractRowFromHtml, parseNumber, parsePublicationDate } from "../src/sources/fetchers.js";
 import { assertPlausibleRate, OFFICIAL_SOURCES, type SourceConfig } from "../src/sources/config.js";
 
 const failures: string[] = [];
@@ -199,6 +199,43 @@ const SCRAPE_CFG = {
 const parsedRate = extractRateFromHtml(TABLE, SCRAPE_CFG, "USD");
 console.log("scraped USD rate ->", parsedRate);
 check("scraper picks the USD row's configured column", parsedRate === 1550, parsedRate);
+
+// --- publication dates must be READ, never invented (all four live source formats).
+check("parsePublicationDate ISO", parsePublicationDate("2026-09-17") === "2026-09-17");
+check("parsePublicationDate CBN 'September-16-2026'", parsePublicationDate("September-16-2026") === "2026-09-16", parsePublicationDate("September-16-2026"));
+check("parsePublicationDate BoG '16 Sep 2026'", parsePublicationDate("16 Sep 2026") === "2026-09-16", parsePublicationDate("16 Sep 2026"));
+check("parsePublicationDate BoT '17-Sep-26'", parsePublicationDate("17-Sep-26") === "2026-09-17", parsePublicationDate("17-Sep-26"));
+check("parsePublicationDate rejects junk", parsePublicationDate("n/a") === null);
+check("parsePublicationDate rejects an impossible date", parsePublicationDate("31 Feb 2026") === null);
+check("parsePublicationDate rejects a far-future date", parsePublicationDate("01 Jan 2099") === null);
+
+// The real BoT row shape. Two regressions are pinned here at once:
+//   - valueColumn must be the MEAN (2641.5878), never the one-sided BUYING quote (2628.4455);
+//   - as_of must come from the row's own date column, not from today's clock.
+const BOT_TABLE = `
+<table>
+  <tr><th>S/NO</th><th>Currency</th><th>Buying</th><th>Selling</th><th>Mean</th><th>Transaction Date</th></tr>
+  <tr><td>40</td><td>USD</td><td>2,628.4455</td><td>2,654.73</td><td>2,641.5878</td><td>17-Sep-26</td></tr>
+</table>`;
+const botRow = extractRowFromHtml(BOT_TABLE, OFFICIAL_SOURCES.TZ as SourceConfig, "USD");
+console.log("BoT row ->", JSON.stringify(botRow));
+check("BoT serves the MEAN, not the buying quote", botRow.rate === 2641.5878, botRow.rate);
+check("BoT as_of comes from the row, not the clock", botRow.asOf === "2026-09-17", botRow.asOf);
+
+// The real BoG row shape: mid rate from col5, and a date that is NOT today.
+const BOG_TABLE = `
+<table>
+  <tr><th>Date</th><th>Currency</th><th>Currency Pair</th><th>Buying</th><th>Selling</th><th>Mid Rate</th></tr>
+  <tr><td>16 Sep 2026</td><td>US Dollar</td><td>USDGHS</td><td>11.4943</td><td>11.5058</td><td>11.5000</td></tr>
+</table>`;
+const bogRow = extractRowFromHtml(BOG_TABLE, OFFICIAL_SOURCES.GH as SourceConfig, "USD");
+console.log("BoG row ->", JSON.stringify(bogRow));
+check("BoG serves the mid rate", bogRow.rate === 11.5, bogRow.rate);
+check("BoG as_of is the published date, not today", bogRow.asOf === "2026-09-16", bogRow.asOf);
+
+// A source with no date column must report null rather than a fabricated date.
+const NO_DATE_CFG = { ...(OFFICIAL_SOURCES.GH as SourceConfig), selectors: { selector: "t", rowSelector: "table", valueColumn: 3, currencyColumn: 1 } };
+check("no date column -> null, never invented", extractRowFromHtml(TABLE, NO_DATE_CFG, "USD").asOf === null);
 
 // The sanity band must reject an inverted quote and a mis-scaled one.
 let inversionRejected = false;
