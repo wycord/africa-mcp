@@ -1,0 +1,29 @@
+{
+  "name": "africa-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pan-African data layer for AI agents — MCP servers (FX & parallel rates, + more). A Braynex Services Ltd product.",
+  "author": "Samuel Orie <braynexservices@gmail.com> (Braynex Services Ltd — https://www.braynexservices.com)",
+  "homepage": "https://github.com/wycord/africa-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wycord/africa-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wycord/africa-mcp/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "lanes/fx-rates"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "smoke": "npm run smoke --workspaces --if-present",
+    "verify": "npm run build && npm run smoke"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

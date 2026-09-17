@@ -1,0 +1,65 @@
+{
+  "name": "@braynexservices/africa-mcp-fx-rates",
+  "displayName": "Pan-African FX & Parallel Rates MCP",
+  "version": "0.1.0",
+  "description": "Pan-African FX & Parallel Rates MCP — official central-bank rates and parallel/street-market rates for 7 v1 African currencies (NGN, GHS, KES, ZAR, TZS, RWF, EGP), with cross-provider reconciliation and staleness reporting, as MCP tools.",
+  "homepage": "https://www.braynexservices.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wycord/africa-mcp.git",
+    "directory": "lanes/fx-rates"
+  },
+  "bugs": {
+    "url": "https://github.com/wycord/africa-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "africa",
+    "fx",
+    "exchange-rates",
+    "parallel-market",
+    "central-bank",
+    "forex",
+    "naira",
+    "cedi",
+    "shilling",
+    "rand",
+    "franc"
+  ],
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepack": "tsc",
+    "start:stdio": "tsx src/stdio.ts",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "dependencies": {
+    "@braynexservices/africa-mcp-core": "^0.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "license": "MIT",
+  "author": "Samuel Orie <braynexservices@gmail.com> (Braynex Services Ltd — https://www.braynexservices.com)",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "africa-mcp-fx-rates": "./dist/stdio.js"
+  },
+  "mcpName": "io.github.Braynexservices/africa-fx-rates"
+}

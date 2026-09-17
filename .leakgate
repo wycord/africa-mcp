@@ -1,0 +1,50 @@
+# africa-mcp — terms that must NEVER appear in anything public.
+# Unreleased lanes (the moat: find the gap, build it first).
+kyc-identity
+gov-services
+ussd-gateway
+logistics-carrier
+francophone-payments
+address-geocoding
+# their contracts
+IdentityAggregator
+GovServicesProvider
+UssdProvider
+LogisticsProvider
+PaymentsProvider
+GeoProvider
+# their env vars
+KYC_PROVIDER
+GOV_PROVIDER
+USSD_PROVIDER
+LOGISTICS_PROVIDER
+PAYMENTS_PROVIDER
+GEO_PROVIDER
+# unannounced vendors / regulators for unshipped lanes
+Smile Identity
+Prembly
+Dojah
+Youverify
+QoreID
+Seamfix
+NIMC
+# monetization / internal business language that must not ship in public docs
+GATED_PAID
+credits per call
+billing rail
+when monetizing
+deferred to phase
+# internal planning vault — must never be referenced publicly
+brain/
+vault/
+# paid upstream providers NOT wired as live deps (registry-listed only until a human
+# approves the recurring cost) — do not leak that we plan to integrate them
+AbokiFX
+Fluentax
+Monierate
+BankFxApi
+# provider API keys — must never be hardcoded / committed / mirrored
+test_sk_[0-9a-f]{16}
+live_sk_[0-9a-f]{16}
+test_pk_[0-9a-f]{16}
+live_pk_[0-9a-f]{16}
