@@ -8,7 +8,7 @@
  * cache — one fetch per source per cache TTL.
  */
 
-export type SourceKind = "api" | "scrape" | "parallel_api";
+export type SourceKind = "api" | "scrape" | "parallel_api" | "unavailable";
 
 export interface SelectorConfig {
   /** CSS selector or regex name — versioned so a redesign is a config diff. */
@@ -50,12 +50,10 @@ export const OFFICIAL_SOURCES: Record<string, SourceConfig> = {
     label: "CBN",
     country: "NG",
     currency: "NGN",
-    kind: "scrape",
-    configVersion: 1,
-    url: "https://www.cbn.gov.ng/rates/ExchRateByCurrency.html",
-    selectors: { selector: "ExchRateByCurrency", rowSelector: "table", valueColumn: 3, currencyColumn: 1 },
-    crossCheck: "frankfurter",
-    notes: "JS-rendered HTML page with Excel export; HTTP 200 verified 2026-09-17 per spec.",
+    kind: "api",
+    configVersion: 2,
+    url: "https://www.cbn.gov.ng/api/GetAllNFEM_Rates",
+    notes: "JS-rendered table loads from /api/GetAllNFEM_Rates; we fetch the JSON directly. Latest row is the official NFEM rate. No independent cross-check wired (Frankfurter does not serve NGN).",
   },
   GH: {
     id: "bog",
@@ -63,24 +61,22 @@ export const OFFICIAL_SOURCES: Record<string, SourceConfig> = {
     country: "GH",
     currency: "GHS",
     kind: "scrape",
-    configVersion: 1,
+    configVersion: 2,
     url: "https://www.bog.gov.gh/treasury-and-the-markets/daily-interbank-fx-rates/",
-    selectors: { selector: "daily-interbank-fx-rates", rowSelector: "table", valueColumn: 4, currencyColumn: 0 },
+    selectors: { selector: "table_2", rowSelector: "table", valueColumn: 5, currencyColumn: 1 },
     // No confirmed Frankfurter coverage for BoG — OpenDataForAfrica is the cross-check.
     crossCheck: "opendataforafrica",
-    notes: "HTML table; HTTP 200 verified 2026-09-17 per spec. Cross-check: cb-ghana.opendataforafrica.org.",
+    notes: "HTML table with id table_31; USD row has Currency='US Dollar' col1 and Closing Rate in col5. Verified 2026-09-17.",
   },
   KE: {
     id: "cbk",
     label: "Central Bank of Kenya",
     country: "KE",
     currency: "KES",
-    kind: "scrape",
-    configVersion: 1,
+    kind: "unavailable",
+    configVersion: 3,
     url: "https://www.centralbank.go.ke/cbk-indicative-rates/",
-    selectors: { selector: "cbk-indicative-rates", rowSelector: "table", valueColumn: 3, currencyColumn: 0 },
-    crossCheck: "frankfurter",
-    notes: "HTML primary, dated PDF fallback; HTTP 200 verified 2026-09-17 per spec.",
+    notes: "UNAVAILABLE: current CBK rates are PDF-only; the HTML table and ajax endpoint both serve stale 2024 data. No current machine-readable KES source exists. Marked unavailable rather than serving a stale rate.",
   },
   ZA: {
     id: "sarb",
@@ -88,11 +84,10 @@ export const OFFICIAL_SOURCES: Record<string, SourceConfig> = {
     country: "ZA",
     currency: "ZAR",
     kind: "api",
-    configVersion: 1,
-    // Official Web API facility; exact JSON contract still to be confirmed at review time.
-    url: "https://custom.resbank.co.za/SarbWebApi/",
+    configVersion: 2,
+    url: "https://custom.resbank.co.za/SarbWebApi/WebIndicators/HomePageRates",
     crossCheck: "frankfurter",
-    notes: "SARB Web API facility exists; exact endpoint/JSON contract TBD at build review.",
+    notes: "SARB Web API returns a JSON indicator array; the 'Rand per US Dollar' entry (TimeseriesCode EXCX135D) is ZAR per USD. Verified 2026-09-17. Frankfurter genuinely serves ZAR, so this cross-check is valid.",
   },
   TZ: {
     id: "bot",
@@ -100,22 +95,22 @@ export const OFFICIAL_SOURCES: Record<string, SourceConfig> = {
     country: "TZ",
     currency: "TZS",
     kind: "scrape",
-    configVersion: 1,
+    configVersion: 2,
     url: "https://www.bot.go.tz/ExchangeRate/excRates?lang=en",
-    selectors: { selector: "excRates", rowSelector: "table", valueColumn: 3, currencyColumn: 0 },
-    crossCheck: "frankfurter",
-    notes: "HTML page; HTTP 200 verified 2026-09-17 per spec. History: bot.go.tz/ExchangeRate/previous_rates.",
+    selectors: { selector: "excRates", rowSelector: "table", valueColumn: 2, currencyColumn: 1 },
+    notes: "HTML table: USD row has currency code in col1 and Mean rate in col2. Verified 2026-09-17. No independent cross-check (Frankfurter does not serve TZS).",
   },
   RW: {
     id: "bnr",
     label: "BNR",
     country: "RW",
     currency: "RWF",
-    kind: "api",
-    configVersion: 1,
+    kind: "unavailable",
+    configVersion: 2,
     url: "https://fxrates.bnr.rw/",
-    // Genuine official API — no cross-check wired yet (spec: add one only once one exists).
-    notes: "Official API; HTTP 200 verified 2026-09-17 per spec. Built FIRST — proves the pipeline.",
+    // The public /latest/usd endpoint now 404s; BNR's root page says API access requires an
+    // application through their e-correspondence portal. No free endpoint to scrape.
+    notes: "UNAVAILABLE: BNR API is application-only as of 2026-09-17. Marked unavailable rather than fabricated.",
   },
 };
 
@@ -145,7 +140,7 @@ export const CROSS_CHECKS: Record<string, SourceConfig> = {
     kind: "api",
     configVersion: 1,
     url: "https://api.frankfurter.dev/v1/latest",
-    notes: "Free, open source, keyless. Aggregates 19 African central banks incl. CBN, CBK, SARB, BoT, CBE.",
+    notes: "Free, open source, keyless. Serves ZAR but NOT NGN/KES/GHS/TZS — the spec's '19 African banks' claim was wrong. Only valid as a cross-check for ZA.",
   },
   opendataforafrica: {
     id: "opendataforafrica",

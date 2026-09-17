@@ -90,6 +90,11 @@ function mentionsCode(text: string, code: string): boolean {
   return new RegExp(`(^|[^A-Za-z])${code}([^A-Za-z]|$)`, "i").test(text);
 }
 
+/** Match a full currency label (e.g. "US Dollar", "US DOLLAR") case-insensitively. */
+function mentionsLabel(text: string, label: string): boolean {
+  return text.replace(/\s+/g, " ").trim().toUpperCase() === label.toUpperCase();
+}
+
 /**
  * Extract a numeric rate for `quote` from table-like HTML.
  *
@@ -116,12 +121,14 @@ export function extractRateFromHtml(html: string, cfg: SourceConfig, quote: stri
     if (sel.currencyColumn !== undefined) {
       const codeCell = cells[sel.currencyColumn];
       if (!codeCell) continue;
-      // When the config names a specific currency column, require an exact (case-insensitive,
-      // whitespace-tolerant) match. A cell that merely *mentions* the code in commentary
-      // ("Rates quoted against USD on 2026-09-16") must not win — otherwise a wrong row
-      // can serve a wrong rate.
+      // The currency cell can hold a code ("USD") or a label ("US Dollar"). Require the
+      // cell to be an exact match to the quote code or its dollar/currency label — never a
+      // mere substring mention ("Rates quoted against USD on 2026-09-16" must not win).
+      // "USDOLLAR" arises from both "US Dollar" (BoG) and "US DOLLAR" (CBK) once spaces
+      // are stripped; the "US"→"USD" expansion covers it.
+      const q = quote.toUpperCase();
       const normalized = codeCell.replace(/[^A-Za-z]/g, "").toUpperCase();
-      if (normalized !== quote.toUpperCase()) continue;
+      if (normalized !== q && normalized !== `${q}DOLLAR` && normalized !== `${q.replace(/D$/, "")}DOLLAR`) continue;
     } else if (!mentionsCode(cellText(row), quote)) {
       continue;
     }
@@ -162,38 +169,42 @@ function asOfDate(raw: unknown): string {
   return typeof raw === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : todayLocal();
 }
 
-// ---------- Rwanda (BNR) — official API, the pipeline-prover, built FIRST ----------
+// ---------- Rwanda (BNR) — UNAVAILABLE ----------
 
 export async function fetchBnr(cfg: SourceConfig): Promise<OfficialRate> {
-  // BNR publishes a webservice with per-date rates; the latest path exposes recent days.
-  // The exact JSON contract is NOT confirmed offline — the shape check below plus the
-  // plausibility band in official() are what stop a contract change becoming a wrong rate.
-  const url = `${cfg.url.replace(/\/$/, "")}/latest/usd`;
-  const { res, body } = await fetchJson(url, { method: "GET" }, { service: cfg.label, fallbackHint: FALLBACK_HINT });
-  if (!res.ok || body === null) throw new SourceUnavailableError(res.status, cfg.label, FALLBACK_HINT);
-  const b = body as Record<string, unknown>;
-  const rates = (b.rates ?? {}) as Record<string, unknown>;
-  // Whether BNR keys this "USD" (the pair requested) or "RWF" (the units returned) is not
-  // confirmed, so accept either spelling. What establishes the value is genuinely
-  // RWF-per-USD, and not an inverted USD-per-RWF quote, is the sanity band in official():
-  // ~1380 passes, ~0.000725 does not. The key name is a label; the band is the check.
-  const value = rates.RWF ?? rates.rwf ?? rates.USD ?? rates.usd ?? rates.rate ?? b.rate;
-  if (typeof value !== "number") throw new Error(`${cfg.label}: no numeric RWF-per-USD rate in payload`);
-  return official(cfg, { rate: value, asOf: asOfDate(b.date ?? b.asOf) });
+  // The public /latest/usd endpoint 404s as of 2026-09-17, and BNR's site states that API
+  // access requires an application via their e-correspondence portal. Config kind is
+  // "unavailable"; this fetcher must never reach the network or fabricate a number.
+  throw new SourceUnavailableError(404, cfg.label, FALLBACK_HINT);
 }
 
-// ---------- Nigeria (CBN) — scrape ----------
+// ---------- Nigeria (CBN) — JSON API ----------
 
 export async function fetchCbn(cfg: SourceConfig): Promise<OfficialRate> {
-  const html = await fetchText(cfg.url, { service: cfg.label, fallbackHint: FALLBACK_HINT });
-  return official(cfg, { rate: extractRateFromHtml(html, cfg, "USD"), asOf: todayLocal() });
+  // The rates page is JS-rendered; the underlying JSON API is fetched directly. Rows come
+  // newest-first, but the id guard makes a reorder serve an old rate as today's — and a
+  // wrong-but-parseable number is the dangerous case — impossible.
+  const { res, body } = await fetchJson(cfg.url, { method: "GET" }, { service: cfg.label, fallbackHint: FALLBACK_HINT });
+  if (!res.ok || body === null) throw new SourceUnavailableError(res.status, cfg.label, FALLBACK_HINT);
+  const rows = Array.isArray(body) ? (body as Record<string, unknown>[]) : [];
+  if (rows.length === 0) throw new Error(`${cfg.label}: NFEM API returned no rate rows`);
+  const latest = rows.reduce((a, b) => (Number(b.id) > Number(a.id) ? b : a), rows[0]);
+  const rate = Number(latest.weightedAvgRate ?? latest.closingrate);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new Error(`${cfg.label}: NFEM latest row has no usable weightedAvgRate/closingrate`);
+  }
+  return official(cfg, { rate, asOf: todayLocal() });
 }
 
-// ---------- Kenya (CBK) — scrape ----------
+// ---------- Kenya (CBK) — UNAVAILABLE (PDF-only) ----------
 
 export async function fetchCbk(cfg: SourceConfig): Promise<OfficialRate> {
-  const html = await fetchText(cfg.url, { service: cfg.label, fallbackHint: FALLBACK_HINT });
-  return official(cfg, { rate: extractRateFromHtml(html, cfg, "USD"), asOf: todayLocal() });
+  // CBK's indicative-rates table on the HTML page is stale (04/01/2024). Current rates ship
+  // only as dated PDFs (/uploads/cbk_indicative_rates/…), and the wpDataTables ajax endpoint
+  // (table_id=91) serves the same stale snapshot. There is no current machine-readable KES
+  // source, so we refuse rather than serve a years-old rate. A PDF parser is a future
+  // enhancement, not something to hand-roll here.
+  throw new SourceUnavailableError(404, cfg.label, FALLBACK_HINT);
 }
 
 // ---------- Ghana (BoG) — scrape ----------
@@ -210,22 +221,22 @@ export async function fetchBot(cfg: SourceConfig): Promise<OfficialRate> {
   return official(cfg, { rate: extractRateFromHtml(html, cfg, "USD"), asOf: todayLocal() });
 }
 
-// ---------- South Africa (SARB) — API (contract TBD) ----------
+// ---------- South Africa (SARB) — JSON API ----------
 
 export async function fetchSarb(cfg: SourceConfig): Promise<OfficialRate> {
-  // The SARB Web API facility exists; its exact JSON contract is unconfirmed. This module
-  // reads the config URL and expects { rates: { ZAR: n } } or a numeric ZAR field. If the
-  // shape does not match it THROWS (-> BROKEN + last-known-good) rather than guessing a
-  // number — the spec-sanctioned refuse-to-guess guard.
+  // The WebIndicators endpoint returns an array of { Name, Date, Value, ... } indicator
+  // rows; the "Rand per US Dollar" entry is ZAR per 1 USD. Match by exact indicator name —
+  // never by position — and refuse to guess if the row or a numeric Value is missing.
   const { res, body } = await fetchJson(cfg.url, { method: "GET" }, { service: cfg.label, fallbackHint: FALLBACK_HINT });
   if (!res.ok || body === null) throw new SourceUnavailableError(res.status, cfg.label, FALLBACK_HINT);
-  const b = body as Record<string, unknown>;
-  const rates = (b.rates ?? b) as Record<string, unknown>;
-  const value = rates.ZAR ?? rates.zar ?? rates.USD ?? rates.usd;
-  if (typeof value !== "number") {
-    throw new Error(`${cfg.label}: unconfirmed API contract — no numeric ZAR-per-USD field; refusing to guess`);
+  const rows = Array.isArray(body) ? (body as Record<string, unknown>[]) : [];
+  const row = rows.find((r) => r.Name === "Rand per US Dollar");
+  if (!row) throw new Error(`${cfg.label}: no "Rand per US Dollar" indicator in HomePageRates payload`);
+  const rate = Number(row.Value);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new Error(`${cfg.label}: "Rand per US Dollar" Value is not a positive number`);
   }
-  return official(cfg, { rate: value, asOf: asOfDate(b.date) });
+  return official(cfg, { rate, asOf: asOfDate(row.Date) });
 }
 
 // ---------- Cross-check sources ----------

@@ -182,9 +182,9 @@ check("parseNumber 1550.25", parseNumber("1550.25") === 1550.25, parseNumber("15
 check("parseNumber 1550", parseNumber("1550") === 1550, parseNumber("1550"));
 
 // Row selection must key off the configured currency column, not any mention of "USD".
-// NG config: currencyColumn=1, valueColumn=3, so the table must have the code in column 1
-// and the rate in column 3. A commentary cell in column 1 that merely mentions USD must not
-// match.
+// NG is a JSON API now, so this exercises the scrape path with a representative config:
+// currencyColumn=1, valueColumn=3. A commentary cell in column 1 that merely mentions USD
+// must not match.
 const TABLE = `
 <table>
   <tr><th> </th><th>Currency</th><th>Buying</th><th>Selling</th></tr>
@@ -192,7 +192,11 @@ const TABLE = `
   <tr><td>—</td><td>GBP</td><td>1,980.00</td><td>1,990.00</td></tr>
   <tr><td>—</td><td>USD</td><td>1,548.00</td><td>1,550.00</td></tr>
 </table>`;
-const parsedRate = extractRateFromHtml(TABLE, OFFICIAL_SOURCES.NG as SourceConfig, "USD");
+const SCRAPE_CFG = {
+  ...(OFFICIAL_SOURCES.GH as SourceConfig),
+  selectors: { selector: "test", rowSelector: "table", valueColumn: 3, currencyColumn: 1 },
+};
+const parsedRate = extractRateFromHtml(TABLE, SCRAPE_CFG, "USD");
 console.log("scraped USD rate ->", parsedRate);
 check("scraper picks the USD row's configured column", parsedRate === 1550, parsedRate);
 
@@ -261,7 +265,8 @@ try {
 }
 check("no cache + failure errors honestly", erroredWithoutCache);
 
-// D: 3 consecutive failures promote the independent cross-check to primary.
+// D: 3 consecutive failures promote the independent cross-check to primary. ZA is the one
+// v1 source with a genuine independent cross-check (Frankfurter serves ZAR).
 const promoting = new LiveFxProvider({
   async fetchOfficial(cfg) {
     throw new SourceUnavailableError(500, cfg.label, "test");
@@ -272,9 +277,9 @@ const promoting = new LiveFxProvider({
 });
 let promoted: { rate: number; source: string } | null = null;
 for (let i = 0; i < 3; i++) {
-  promoted = await promoting.getOfficialRate("NG").catch(() => null);
+  promoted = await promoting.getOfficialRate("ZA").catch(() => null);
 }
-console.log("live NG after 3 failures ->", JSON.stringify(promoted));
+console.log("live ZA after 3 failures ->", JSON.stringify(promoted));
 check("cross-check is promoted after 3 failures", promoted?.rate === 1560, promoted);
 check("promotion is disclosed in the source", /promoted fallback/.test(promoted?.source ?? ""), promoted?.source);
 
@@ -291,13 +296,26 @@ console.log("live EG reconcile ->", JSON.stringify(egRec));
 check("EG does not read one source twice", egRec.official.length === 1, egRec.official);
 check("EG reports no false agreement", egRec.discrepancy_flag === false);
 
-// ...whereas Nigeria has a genuinely separate primary and cross-check: two rows.
+// ...whereas ZA has a genuinely separate primary and cross-check: two rows.
+const zaProvider = new LiveFxProvider({
+  async fetchOfficial(cfg) {
+    return officialFor(cfg, 16.3);
+  },
+  async fetchCrossCheck(_cfg, _currency) {
+    return { rate: 16.35, asOf: "2026-09-16" };
+  },
+});
+const zaRec = await zaProvider.reconcileRate("ZA", "ZAR");
+console.log("live ZA reconcile ->", JSON.stringify(zaRec));
+check("ZA compares two independent sources", zaRec.official.length === 2, zaRec.official);
+check("ZA live sources are distinct", zaRec.official[0]?.source !== zaRec.official[1]?.source);
+check("ZA live spread is computed", zaRec.spread_pct === 0, zaRec.spread_pct);
+
+// Nigeria has NO independent cross-check wired (Frankfurter does not serve NGN), so its
+// reconcile must report exactly one official row — never a self-comparison that fakes two.
 const ngProvider = new LiveFxProvider({
   async fetchOfficial(cfg) {
     return officialFor(cfg, 1550);
-  },
-  async fetchCrossCheck(_cfg, _currency) {
-    return { rate: 1553.1, asOf: "2026-09-16" };
   },
   async fetchParallel(cfg) {
     return { ...officialFor(cfg, 1610), quoteCurrency: "USDT" };
@@ -305,8 +323,7 @@ const ngProvider = new LiveFxProvider({
 });
 const ngRec = await ngProvider.reconcileRate("NG", "NGN");
 console.log("live NG reconcile ->", JSON.stringify(ngRec));
-check("NG compares two independent sources", ngRec.official.length === 2, ngRec.official);
-check("NG live sources are distinct", ngRec.official[0]?.source !== ngRec.official[1]?.source);
+check("NG without cross-check has one official row", ngRec.official.length === 1, ngRec.official);
 check("NG live spread is computed", ngRec.spread_pct === 3.87, ngRec.spread_pct);
 
 // F: a successful fetch whose value is older than the threshold is still stale.
